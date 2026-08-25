@@ -1,5 +1,11 @@
 ARG BASE_IMAGE=registry.access.redhat.com/ubi9/ubi:9.8-1786957459
-FROM ${BASE_IMAGE} as build
+ARG SYFT_IMAGE=docker.io/anchore/syft:v1.51.0@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0
+ARG JQ_IMAGE=ghcr.io/jqlang/jq:1.8.1@sha256:4f34c6d23f4b1372ac789752cc955dc67c2ae177eb1b5860b75cdc5091ce6f91
+
+FROM ${SYFT_IMAGE} AS syft
+FROM ${JQ_IMAGE} AS jq
+
+FROM ${BASE_IMAGE} AS build
 
 ARG TARGETARCH
 ARG GOLANG_VERSION
@@ -27,7 +33,7 @@ RUN if [ "$DRIVER_TYPE" = "vgpu" ]; then \
     go build -o vgpu-util && \
     mv vgpu-util /work; fi
 
-FROM ${BASE_IMAGE}
+FROM ${BASE_IMAGE} AS runtime
 
 ARG TARGETARCH
 ENV TARGETARCH=$TARGETARCH
@@ -113,5 +119,26 @@ RUN if [ -n "${CVE_UPDATES}" ]; then \
 
 # Remove cuda repository to avoid GPG errors
 RUN rm -f /etc/yum.repos.d/cuda.repo
+
+# Generate third-party notices from the completed runtime filesystem in a
+# disposable stage. The generation tools do not ship in the final image.
+FROM runtime AS tpn
+
+ARG GOLANG_VERSION
+ARG GIT_COMMIT
+ARG KERNEL_VERSION
+ARG CVE_UPDATES
+
+COPY --from=syft /syft /tmp/tpn-tools/syft
+COPY --from=jq /jq /tmp/tpn-tools/jq
+COPY generate-in-image-tpn.sh /tmp/generate-in-image-tpn.sh
+RUN PATH="/tmp/tpn-tools:${PATH}" \
+    SYFT=/tmp/tpn-tools/syft \
+    JQ=/tmp/tpn-tools/jq \
+    bash /tmp/generate-in-image-tpn.sh /licenses
+
+FROM runtime
+
+COPY --from=tpn /licenses /licenses
 
 ENTRYPOINT ["nvidia-driver", "init"]
