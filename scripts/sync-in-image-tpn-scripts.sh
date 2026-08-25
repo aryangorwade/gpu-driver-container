@@ -37,13 +37,19 @@ sync_family \
     "${SCRIPT_DIR}/generate-in-image-tpn-rhel.sh" \
     "${REPO_ROOT}/rhel8/generate-in-image-tpn.sh" \
     "${REPO_ROOT}/rhel9/generate-in-image-tpn.sh" \
-    "${REPO_ROOT}/rhel10/generate-in-image-tpn.sh"
+    "${REPO_ROOT}/rhel10/generate-in-image-tpn.sh" \
+    "${REPO_ROOT}/rhel8/precompiled/generate-in-image-tpn.sh" \
+    "${REPO_ROOT}/rhel9/precompiled/generate-in-image-tpn.sh" \
+    "${REPO_ROOT}/rhel10/precompiled/generate-in-image-tpn.sh"
 
 sync_family \
     "${SCRIPT_DIR}/generate-in-image-tpn-ubuntu.sh" \
     "${REPO_ROOT}/ubuntu22.04/generate-in-image-tpn.sh" \
     "${REPO_ROOT}/ubuntu24.04/generate-in-image-tpn.sh" \
-    "${REPO_ROOT}/ubuntu26.04/generate-in-image-tpn.sh"
+    "${REPO_ROOT}/ubuntu26.04/generate-in-image-tpn.sh" \
+    "${REPO_ROOT}/ubuntu22.04/precompiled/generate-in-image-tpn.sh" \
+    "${REPO_ROOT}/ubuntu24.04/precompiled/generate-in-image-tpn.sh" \
+    "${REPO_ROOT}/ubuntu26.04/precompiled/generate-in-image-tpn.sh"
 
 if [[ "${MODE}" == "--check" ]]; then
     printf 'All in-image TPN scripts are synchronized.\n'

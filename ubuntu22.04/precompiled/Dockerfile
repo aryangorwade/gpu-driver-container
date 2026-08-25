@@ -1,6 +1,12 @@
 ARG BASE_IMAGE=ubuntu:jammy-20260731.1
 
-FROM ${BASE_IMAGE}
+ARG SYFT_IMAGE=docker.io/anchore/syft:v1.51.0@sha256:678bfa565b60f747aac0f8e964fe5588a24445b8d0a480e91f6efd70020dfbb0
+ARG JQ_IMAGE=ghcr.io/jqlang/jq:1.8.1@sha256:4f34c6d23f4b1372ac789752cc955dc67c2ae177eb1b5860b75cdc5091ce6f91
+
+FROM ${SYFT_IMAGE} AS syft
+FROM ${JQ_IMAGE} AS jq
+
+FROM ${BASE_IMAGE} AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -79,5 +85,25 @@ LABEL vcs-ref="${GIT_COMMIT}"
 LABEL release="N/A"
 LABEL summary="Provision the NVIDIA driver through containers"
 LABEL description="See summary"
+
+# Generate third-party notices from the completed runtime filesystem in a
+# disposable stage. Syft, jq, and the generator never reach the shipped image.
+FROM runtime AS tpn
+
+ARG GIT_COMMIT
+ARG KERNEL_VERSION
+ARG CVE_UPDATES
+
+COPY --from=syft /syft /tmp/tpn-tools/syft
+COPY --from=jq /jq /tmp/tpn-tools/jq
+COPY generate-in-image-tpn.sh /tmp/generate-in-image-tpn.sh
+RUN PATH="/tmp/tpn-tools:${PATH}" \
+    SYFT=/tmp/tpn-tools/syft \
+    JQ=/tmp/tpn-tools/jq \
+    bash /tmp/generate-in-image-tpn.sh /licenses
+
+FROM runtime
+
+COPY --from=tpn /licenses /licenses
 
 ENTRYPOINT ["nvidia-driver", "init"]
