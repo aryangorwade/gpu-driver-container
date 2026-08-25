@@ -169,6 +169,11 @@ RUN rm -f /etc/yum.repos.d/cuda.repo
 # disposable stage. Syft, jq, and the generator never reach the shipped image.
 # Archive recovery is off: this image unregisters from subscription-manager and
 # removes its repositories above, so no package archive can be fetched here.
+#
+# The unmanaged-file audit only reports here. These images need a driver-toolkit
+# image and RHSM credentials to build, so the audit has never run against one.
+# Making it fatal untested could break a build this change cannot exercise.
+# Drop TPN_AUDIT_UNMANAGED once a build has been seen to pass.
 FROM runtime AS tpn
 
 ARG GIT_COMMIT
@@ -182,6 +187,7 @@ RUN PATH="/tmp/tpn-tools:${PATH}" \
     SYFT=/tmp/tpn-tools/syft \
     JQ=/tmp/tpn-tools/jq \
     TPN_RECOVER_ARCHIVES=0 \
+    TPN_AUDIT_UNMANAGED=0 \
     bash /tmp/generate-in-image-tpn.sh /licenses
 
 FROM runtime

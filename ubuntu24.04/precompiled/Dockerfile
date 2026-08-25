@@ -80,6 +80,11 @@ LABEL description="See summary"
 
 # Generate third-party notices from the completed runtime filesystem in a
 # disposable stage. Syft, jq, and the generator never reach the shipped image.
+#
+# The unmanaged-file audit only reports here. These images need a kernel version
+# matched to published driver packages to build, so the audit has never run
+# against one. Making it fatal untested could break a build this change cannot
+# exercise. Drop TPN_AUDIT_UNMANAGED once a build has been seen to pass.
 FROM runtime AS tpn
 
 ARG GIT_COMMIT
@@ -92,6 +97,7 @@ COPY generate-in-image-tpn.sh /tmp/generate-in-image-tpn.sh
 RUN PATH="/tmp/tpn-tools:${PATH}" \
     SYFT=/tmp/tpn-tools/syft \
     JQ=/tmp/tpn-tools/jq \
+    TPN_AUDIT_UNMANAGED=0 \
     bash /tmp/generate-in-image-tpn.sh /licenses
 
 FROM runtime

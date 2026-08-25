@@ -33,6 +33,7 @@ TPN_SYFT_ALL_CATALOGERS="${TPN_SYFT_ALL_CATALOGERS:-0}"
 TPN_RECOVER_ARCHIVES="${TPN_RECOVER_ARCHIVES:-1}"
 TPN_FETCH_UPSTREAM="${TPN_FETCH_UPSTREAM:-1}"
 TPN_STRICT="${TPN_STRICT:-0}"
+TPN_AUDIT_UNMANAGED="${TPN_AUDIT_UNMANAGED:-1}"
 
 # Syft cannot reliably map arbitrary binaries and scripts downloaded outside
 # DPKG to an upstream name, version, and license.
@@ -40,6 +41,38 @@ TPN_STRICT="${TPN_STRICT:-0}"
 standalone_manifest() {
     cat <<'EOF'
 ubuntu22.04|/usr/local/bin/donkey|donkey|1.1.0|ISC|https://raw.githubusercontent.com/3XX0/donkey/v1.1.0/donkey.c|c-header|binary-stderr|https://github.com/3XX0/donkey
+EOF
+}
+
+# Paths that ship but need no third-party notice, in two groups:
+#   - files this repository installs itself, which are NVIDIA's own work
+#   - no-op stubs created by the base image, which contain no third-party code
+# Every other shipped executable must be package-owned or declared in
+# standalone_manifest(). audit_unmanaged_files() enforces that.
+notice_exempt_manifest() {
+    cat <<'EOF'
+/usr/local/bin/common.sh
+/usr/local/bin/nvidia-driver
+/usr/local/bin/ocp_dtk_entrypoint
+/usr/local/bin/vgpu-util
+/usr/sbin/initctl
+/usr/sbin/policy-rc.d
+EOF
+}
+
+# Directories searched for shipped executables and shared objects. The driver
+# payload under /drivers is deliberately out of scope: a release-specific .run
+# installer is supplied separately and is not covered by this document.
+audit_search_roots() {
+    cat <<'EOF'
+/usr/bin
+/usr/sbin
+/usr/local/bin
+/usr/local/sbin
+/usr/lib
+/usr/lib64
+/usr/libexec
+/opt
 EOF
 }
 
@@ -400,6 +433,84 @@ collect_standalone_components() {
     done < <(standalone_manifest)
 }
 
+# Ubuntu's minimized base images replace some binaries with an explanatory stub
+# and record a dpkg diversion (/usr/bin/man -> /usr/bin/man.REAL). The stub is
+# written by the base image and holds no third-party code, while the diverted
+# original stays package-owned, so the diverted-from path is accounted for.
+diverted_paths() {
+    dpkg-divert --list 2>/dev/null \
+        | awk '{ for (i = 1; i < NF; i++) if ($i == "of") { print $(i + 1); break } }'
+}
+
+# RHEL and Debian are usr-merged: /bin, /sbin, /lib, and /lib64 are symlinks
+# into /usr. The package databases still record the unmerged path (rpm reports
+# /lib64/libgcc_s.so.1) while find(1) returns the resolved path
+# (/usr/lib64/libgcc_s.so.1), so the two never compare equal. Rewrite both sides
+# to the /usr form, but only for prefixes that really are symlinks here, so a
+# non-merged image is left alone.
+usr_merge_filter() {
+    local directory expression=""
+    for directory in bin sbin lib lib64; do
+        [[ -L "/${directory}" ]] || continue
+        expression+="s#^/${directory}/#/usr/${directory}/#;"
+    done
+    if [[ -n "${expression}" ]]; then
+        sed -E "${expression}"
+    else
+        cat
+    fi
+}
+
+# Syft reports only what the DPKG database owns, and standalone_manifest() is
+# maintained by hand. A binary added to a Dockerfile by curl would therefore
+# ship with no notice and no warning, because report_missing_license_text()
+# only walks components already in the index. This closes that hole by failing
+# on any shipped executable the inventory cannot describe.
+#
+# This is one sorted-set difference rather than a lookup per path: per-path awk
+# over the ownership table is prohibitively slow under buildx/QEMU, which is the
+# same constraint that shaped filter_license_rows().
+audit_unmanaged_files() {
+    local ownership="$1"
+    local candidates="${WORK_ROOT}/audit-candidates.txt"
+    local owned="${WORK_ROOT}/audit-owned.txt"
+    local declared="${WORK_ROOT}/audit-declared.txt"
+    local unmanaged="${WORK_ROOT}/audit-unmanaged.txt"
+    local root path count
+
+    while IFS= read -r root; do
+        [[ -d "${root}" ]] || continue
+        find "${root}" -maxdepth 3 -type f \
+            \( -perm -u+x -o -name '*.so' -o -name '*.so.*' \) -print 2>/dev/null
+    done < <(audit_search_roots) | usr_merge_filter | LC_ALL=C sort -u > "${candidates}"
+
+    cut -f4 "${ownership}" | usr_merge_filter | LC_ALL=C sort -u > "${owned}"
+    {
+        standalone_manifest \
+            | awk -F '|' -v distribution="${DISTRIBUTION}" \
+                '$1 == distribution { print $2 }'
+        notice_exempt_manifest
+        diverted_paths
+    } | usr_merge_filter | LC_ALL=C sort -u > "${declared}"
+
+    LC_ALL=C comm -23 "${candidates}" "${owned}" \
+        | LC_ALL=C comm -23 - "${declared}" > "${unmanaged}"
+
+    count="$(wc -l < "${unmanaged}" | tr -d ' ')"
+    (( count == 0 )) && return 0
+
+    while IFS= read -r path; do
+        printf 'undocumented third-party file: %s\n' "${path}" >&2
+    done < "${unmanaged}"
+
+    if [[ "${TPN_AUDIT_UNMANAGED}" == 1 ]]; then
+        die "${count} shipped file(s) are neither package-owned nor declared." \
+            "Add each third-party path to standalone_manifest()." \
+            "Add each NVIDIA-owned or base-image path to notice_exempt_manifest()."
+    fi
+    warn "${count} shipped file(s) are neither package-owned nor declared."
+}
+
 collect_image_licenses() {
     local distribution="$1" package_keys="$2" license_root="$3" inventory="$4"
     local ownership="${WORK_ROOT}/ownership.tsv"
@@ -418,6 +529,7 @@ collect_image_licenses() {
 
     collect_standalone_components \
         "${distribution}" "${ownership}" "${license_root}" "${inventory}"
+    audit_unmanaged_files "${ownership}"
 }
 
 collect_vgpu_go_dependencies() {
@@ -832,6 +944,7 @@ main() {
     check_boolean TPN_RECOVER_ARCHIVES "${TPN_RECOVER_ARCHIVES}"
     check_boolean TPN_FETCH_UPSTREAM "${TPN_FETCH_UPSTREAM}"
     check_boolean TPN_STRICT "${TPN_STRICT}"
+    check_boolean TPN_AUDIT_UNMANAGED "${TPN_AUDIT_UNMANAGED}"
 
     detect_distribution
     detect_architecture
