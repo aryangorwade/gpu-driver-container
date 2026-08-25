@@ -50,6 +50,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         name: Check out code
+      - name: Verify in-image TPN scripts are synchronized
+        run: ./scripts/sync-in-image-tpn-scripts.sh --check
       - name: Calculate build vars
         id: vars
         run: |
